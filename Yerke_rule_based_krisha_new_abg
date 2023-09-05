@@ -1,0 +1,191 @@
+import os.path
+import datetime
+import pandas as pd
+import pyodbc
+from sklearn.metrics.pairwise import haversine_distances
+from math import radians
+import time
+import warnings
+import argparse
+
+
+
+warnings.filterwarnings('ignore')
+
+from datetime import timedelta
+
+class RealEstateAnalysis:
+    def __init__(self, connection_str, fetch_data=True):
+        self.connection_str = connection_str
+        if fetch_data:
+            self.fetch_and_store_data()
+
+    def fetch_and_store_data(self):
+        print("Debug: Entered fetch_and_store_data method")  # Debugging statement
+
+        if os.path.exists('local_data.csv'):
+            print("Debug: local_data.csv exists")  # Debugging statement
+
+            # Get last modified time of the file
+            last_modified_time = os.path.getmtime('local_data.csv')
+            last_modified_date = datetime.datetime.fromtimestamp(last_modified_time).date()
+
+            if last_modified_date == datetime.datetime.now().date():
+                print("Data already fetched today. Skipping database fetch.")
+                return
+            else:
+                print("Data was not fetched today. Proceeding to fetch data.")
+
+        else:
+            print("Debug: local_data.csv does not exist. Proceeding to fetch data.")
+
+        # Your data fetch logic here
+        df = self.fetch_data_for_date(datetime.datetime.now())
+        if len(df) < 10000:
+            additional_rows_needed = 10000 - len(df)
+            previous_day = datetime.datetime.now() - timedelta(days=1)
+            while additional_rows_needed > 0 and len(df) < 100000:
+                additional_data = self.fetch_data_for_date(previous_day)
+                if len(additional_data) > 0:
+                    additional_data_to_use = additional_data.head(min(100000 - len(df), additional_rows_needed))
+                    df = pd.concat([df, additional_data_to_use], ignore_index=True)
+                    additional_rows_needed -= len(additional_data_to_use)
+                previous_day -= timedelta(days=1)
+        df.to_csv('local_data.csv', index=False)
+        os.utime('local_data.csv', times=None)  # Update t
+
+    def fetch_data_for_date(self, date):
+        formatted_date = date.strftime('%Y-%m-%d')
+        query = f"""SELECT * FROM [RealEstateData].[dbo].[KrishaAdsFromUAS] WHERE CreateDate = '{formatted_date}'"""
+        with pyodbc.connect(self.connection_str) as conn:
+            df = pd.read_sql(query, conn)
+        return df
+    def preprocess_dataframe(self, df):
+        df['Rooms'] = df['Rooms'].astype(int)
+        df = df[pd.to_numeric(df['Year'], errors='coerce').notnull()]
+        df['Year'] = df['Year'].astype(int)
+        df['floor_new'] = df.apply(self.calculate_floor_new, axis=1)
+        df['Latitude'] = pd.to_numeric(df['Latitude'], errors='coerce')
+        df['Longitude'] = pd.to_numeric(df['Longitude'], errors='coerce')
+        return df
+    def calculate_floor_new(self, row):
+        floor = row['Floor']
+        try:
+            n, x = [int(i) for i in floor.split(' из ')]
+            if n == x:
+                return 3
+            elif n == 1:
+                return 1
+            else:
+                return 2
+        except ValueError:
+            return None
+    def calculate_distance(self, row, evaluated_apartment):
+        apartment_loc = [radians(round(row['Latitude'], 4)), radians(round(row['Longitude'], 4))]
+        evaluated_apartment_loc = [radians(round(evaluated_apartment['latitude'], 4)), radians(round(evaluated_apartment['longitude'], 4))]
+        distance = haversine_distances([apartment_loc, evaluated_apartment_loc])[0,1] * 6371000
+        return distance
+    def filter_dataframe(self, df, evaluated_apartment, radius, allow_additional_fetch=True):
+        # Debug: Print unique room counts to check if `room_count` exists
+        same_room_count_df = df[df['Rooms'] == evaluated_apartment['room_count']].copy()
+        same_room_count_df['distance'] = same_room_count_df.apply(
+            lambda row: self.calculate_distance(row, evaluated_apartment),  # Added 'self.' here
+            axis=1, result_type='expand')
+        within_radius_df = same_room_count_df[same_room_count_df['distance'] <= radius]
+        min_year = evaluated_apartment['year_of_construction'] - 5
+        max_year = evaluated_apartment['year_of_construction'] + 5
+        within_year_df_ge = within_radius_df[within_radius_df['Year'] >= min_year]
+        within_year_df = within_year_df_ge[within_year_df_ge['Year'] <= max_year]
+        within_year_df.loc[:, 'Building'] = within_year_df['Building'].astype(str)
+        same_material_df = within_year_df[within_year_df['Building'] == evaluated_apartment['wall_material']]
+        same_condition_df = same_material_df[same_material_df['Renovation'] == evaluated_apartment['condition']]
+        same_floor_df = same_condition_df[same_condition_df['floor_new'] == evaluated_apartment['floor_new']]
+        df['Square'] = pd.to_numeric(df['Square'], errors='coerce')
+        same_floor_df.loc[:, 'Square'] = pd.to_numeric(same_floor_df['Square'], errors='coerce')
+        min_space = evaluated_apartment['total_space'] * 0.9
+        max_space = evaluated_apartment['total_space'] * 1.1
+        similar_apartments_df = same_floor_df[(same_floor_df['Square'] >= min_space) & (same_floor_df['Square'] <= max_space)]
+        if similar_apartments_df.empty and allow_additional_fetch:
+            print("No suitable apartments found, fetching more data...")
+            current_row_count = len(df)
+            self.fetch_and_store_data(start_row=current_row_count)
+            df = pd.read_csv('local_data.csv')
+            df = self.preprocess_dataframe(df)
+            return self.filter_dataframe(df, evaluated_apartment, radius, allow_additional_fetch=False)
+        else:
+            return similar_apartments_df
+    def sort_and_select(self, similar_apartments_df, num_apartments, evaluated_apartment):
+        similar_apartments_df['similarity'] = abs(
+            similar_apartments_df['Square'] - evaluated_apartment['total_space']) + abs(
+            similar_apartments_df['Year'] - evaluated_apartment['year_of_construction'])
+        sorted_similar_apartments_df = similar_apartments_df.sort_values(by='similarity')
+        top_similar_apartments_df = sorted_similar_apartments_df.head(num_apartments)
+        return top_similar_apartments_df
+    def print_descriptive_statistics(self, top_similar_apartments_df):
+        if top_similar_apartments_df.empty:
+            print("No suitable apartments found for descriptive statistics.")
+            return
+        top_similar_apartments_df['Price'] = pd.to_numeric(top_similar_apartments_df['Price'], errors='coerce')
+        top_similar_apartments_df['price_per_1sqrm'] = top_similar_apartments_df['Price'] / top_similar_apartments_df[
+            'Square']
+        average_price_per_sqrm = top_similar_apartments_df['price_per_1sqrm'].mean()
+        print(f'Average price per 1 square meter of the top similar apartments: {average_price_per_sqrm}')
+    def find_top_similar_apartments_from_local(self, evaluated_apartment, radius, num_apartments):
+        df = pd.read_csv('local_data.csv')
+        print(f"Initial DataFrame shape: {df.shape}")
+        df = self.preprocess_dataframe(df)
+        similar_apartments_df = self.filter_dataframe(df, evaluated_apartment, radius)
+        print(f"After filtering DataFrame shape: {similar_apartments_df.shape}")
+        sorted_similar_apartments_df = self.sort_and_select(similar_apartments_df, num_apartments, evaluated_apartment)
+        self.print_descriptive_statistics(sorted_similar_apartments_df)
+
+
+
+
+def main(fetch_data):
+    fetch_data = True  # manually setting to True for debugging
+    print(f"Debug: main method entered, fetch_data = {fetch_data}")  # Debugging
+    # rest of your code
+
+    start_time = time.time()
+    connection_str = 'DRIVER={SQL Server};SERVER=10.10.2.92;DATABASE=RealEstateData;Trusted_Connection=yes'
+    real_estate_analysis = RealEstateAnalysis(connection_str, fetch_data=fetch_data)
+
+    evaluated_apartment = {
+        'room_count': 2,
+        'latitude': 43.222807,
+        'longitude': 76.783944,
+        'year_of_construction': 2014,
+        'wall_material': 'монолитный',
+        'condition': 'хорошее',
+        'floor_new': 2,
+        'total_space': 60
+    }
+
+    real_estate_analysis.find_top_similar_apartments_from_local(evaluated_apartment, 1000, 21)
+
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    print(f"Time taken to run the code: {elapsed_time} seconds")
+
+
+if __name__ == "__main__":
+    try:
+        parser = argparse.ArgumentParser(description='Run real estate analysis.')
+        parser.add_argument('--fetch-data', dest='fetch_data', action='store_true',
+                            help='Fetch data from the DWH')
+        args, unknown = parser.parse_known_args()  # this will capture unexpected arguments
+    except SystemExit:
+        args = argparse.Namespace()
+        args.fetch_data = False  # default value
+
+    main(args.fetch_data)
+
+
+# if os.path.exists('local_data.csv'):
+#     last_modified_time = os.path.getmtime('local_data.csv')
+#     last_modified_date = datetime.datetime.fromtimestamp(last_modified_time).date()
+#     print(f"Last modified date of local_data.csv: {last_modified_date}")
+# else:
+#     print("local_data.csv does not exist.")
+
