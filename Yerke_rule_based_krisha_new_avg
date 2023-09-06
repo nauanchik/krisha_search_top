@@ -7,6 +7,7 @@ from math import radians
 import time
 import warnings
 import argparse
+import json
 
 
 
@@ -121,71 +122,37 @@ class RealEstateAnalysis:
         sorted_similar_apartments_df = similar_apartments_df.sort_values(by='similarity')
         top_similar_apartments_df = sorted_similar_apartments_df.head(num_apartments)
         return top_similar_apartments_df
+
     def print_descriptive_statistics(self, top_similar_apartments_df):
         if top_similar_apartments_df.empty:
             print("No suitable apartments found for descriptive statistics.")
-            return
+            return None  # Return None if no suitable apartments found
+
         top_similar_apartments_df['Price'] = pd.to_numeric(top_similar_apartments_df['Price'], errors='coerce')
         top_similar_apartments_df['price_per_1sqrm'] = top_similar_apartments_df['Price'] / top_similar_apartments_df[
             'Square']
         average_price_per_sqrm = top_similar_apartments_df['price_per_1sqrm'].mean()
         print(f'Average price per 1 square meter of the top similar apartments: {average_price_per_sqrm}')
-    def find_top_similar_apartments_from_local(self, evaluated_apartment, radius, num_apartments):
+        return average_price_per_sqrm  # Return the average price per square meter
+
+    def find_top_similar_apartments_from_local(self, evaluated_apartment_json_file, radius, num_apartments):
+        # Read evaluated_apartment from JSON file
+        with open(evaluated_apartment_json_file, 'r') as f:
+            evaluated_apartment = json.load(f)
+
         df = pd.read_csv('local_data.csv')
         print(f"Initial DataFrame shape: {df.shape}")
         df = self.preprocess_dataframe(df)
         similar_apartments_df = self.filter_dataframe(df, evaluated_apartment, radius)
         print(f"After filtering DataFrame shape: {similar_apartments_df.shape}")
         sorted_similar_apartments_df = self.sort_and_select(similar_apartments_df, num_apartments, evaluated_apartment)
-        self.print_descriptive_statistics(sorted_similar_apartments_df)
+
+        average_price_per_sqrm = self.print_descriptive_statistics(sorted_similar_apartments_df)
+        return average_price_per_sqrm  # Return the average price per square meter
 
 
+#ПРИМЕР ВЫЗОВА ФУНКЦИИ
+json_file_path = 'path/to/your/evaluated_apartment.json'  # replace with your actual path
+average_price_per_sqrm = real_estate_analysis.find_top_similar_apartments_from_local(json_file_path, 1000, 21)
 
-
-def main(fetch_data):
-    fetch_data = True  # manually setting to True for debugging
-    print(f"Debug: main method entered, fetch_data = {fetch_data}")  # Debugging
-    # rest of your code
-
-    start_time = time.time()
-    connection_str = 'DRIVER={SQL Server};SERVER=10.10.2.92;DATABASE=RealEstateData;Trusted_Connection=yes'
-    real_estate_analysis = RealEstateAnalysis(connection_str, fetch_data=fetch_data)
-
-    evaluated_apartment = {
-        'room_count': 2,
-        'latitude': 43.222807,
-        'longitude': 76.783944,
-        'year_of_construction': 2014,
-        'wall_material': 'монолитный',
-        'condition': 'хорошее',
-        'floor_new': 2,
-        'total_space': 60
-    }
-
-    real_estate_analysis.find_top_similar_apartments_from_local(evaluated_apartment, 1000, 21)
-
-    end_time = time.time()
-    elapsed_time = end_time - start_time
-    print(f"Time taken to run the code: {elapsed_time} seconds")
-
-
-if __name__ == "__main__":
-    try:
-        parser = argparse.ArgumentParser(description='Run real estate analysis.')
-        parser.add_argument('--fetch-data', dest='fetch_data', action='store_true',
-                            help='Fetch data from the DWH')
-        args, unknown = parser.parse_known_args()  # this will capture unexpected arguments
-    except SystemExit:
-        args = argparse.Namespace()
-        args.fetch_data = False  # default value
-
-    main(args.fetch_data)
-
-
-# if os.path.exists('local_data.csv'):
-#     last_modified_time = os.path.getmtime('local_data.csv')
-#     last_modified_date = datetime.datetime.fromtimestamp(last_modified_time).date()
-#     print(f"Last modified date of local_data.csv: {last_modified_date}")
-# else:
-#     print("local_data.csv does not exist.")
 
