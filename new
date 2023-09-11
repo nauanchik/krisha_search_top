@@ -1,0 +1,246 @@
+import os.path
+import datetime
+import pandas as pd
+import pyodbc
+from sklearn.metrics.pairwise import haversine_distances
+from math import radians
+import time
+import warnings
+import argparse
+import json
+from datetime import timedelta
+
+
+warnings.filterwarnings('ignore')
+
+building_types_dict = {
+    "монолитный": ["монолитный", "бетон", "бетонные блоки", "бетонокаркас", "блочный", "газобетон", "газоблок",
+                   "газосиликатные блоки", "ж/б блок", "ж/б пеноблок", "железобетон", "керамзитобетон",
+                   "керамзитовый блок", "крупноблочные", "монолит", "пенобетон", "пеноблочный", "пенополистиролбетон",
+                   "пескоблок", "сплитерные блоки", "теплоблок", "эко-блок", "финблок"],
+    "панельный": ["панельный", "ж/б панели", "ж/б плиты", "крупнопанельные", "панель"],
+    "шлакоблочный": ["шлакоблочный", "монолит шлаколитой", "шлак", "шлакобетон", "шлакоблок", "шлакозалитый"],
+    "деревянный": ["деревянный", "бревенчатые", "брусчатый", "дерево", "дощатые", "сруб", "шпальные",
+                    "деревобетон (арболит)", "фибролитовые блоки", "фибролитовые плиты", "деревянные рубленные"],
+    "сендвич-панели": ["сендвич-панели", "изодом (несъемная опалубка)", "лстк (лёгкие стальные тонкостенные конструкции)",
+    "сип панели", "сэндвич панели"],
+    "каркасно-щитовой": ["каркасно-щитовой", "каркасно насыпной", "каркасно-камышитовые обложенные кирпичом",
+    "сборно-щитовой", "каркасно-обшивные"]
+}
+
+
+class RealEstateAnalysis:
+    def __init__(self, connection_str, fetch_data=True):
+        self.connection_str = connection_str
+        self.oldest_date_fetched = None  # Initialize the variable here
+
+        if fetch_data:
+            self.fetch_and_store_data()
+
+    def fetch_and_store_data(self, last_fetched_hrefid=None, force_fetch=False):
+        if not force_fetch:  # Skip the checks when force_fetch is True
+            if os.path.exists('local_data.csv'):
+                last_modified_time = os.path.getmtime('local_data.csv')
+                last_modified_date = datetime.datetime.fromtimestamp(last_modified_time).date()
+
+                if last_modified_date == datetime.datetime.now().date():
+                    print("Data already fetched today. Skipping database fetch.")
+                    return
+                else:
+                    print("Data was not fetched today. Proceeding to fetch data.")
+            else:
+                print("local_data.csv does not exist. Proceeding to fetch data.")
+
+        # Rest of the code remains the same
+        df = self.fetch_data_by_limit(100000, last_fetched_hrefid)
+        df.to_csv('local_data.csv', index=False)
+        os.utime('local_data.csv', times=None)
+
+    def fetch_data_by_limit(self, limit, last_fetched_hrefid=None):
+        # Here, update your SQL query to fetch data ordered by CreateDate,
+        # and also add a WHERE clause for the HrefId if needed.
+        if last_fetched_hrefid:
+            query = f"""
+            SELECT TOP {limit} * FROM [RealEstateData].[dbo].[KrishaAdsFromUAS]
+            WHERE HrefId > {last_fetched_hrefid}
+            ORDER BY CreateDate DESC, HrefId ASC
+            """
+        else:
+            query = f"""
+            SELECT TOP {limit} * FROM [RealEstateData].[dbo].[KrishaAdsFromUAS]
+            ORDER BY CreateDate DESC, HrefId ASC
+            """
+
+        with pyodbc.connect(self.connection_str) as conn:
+            df = pd.read_sql(query, conn)
+        return df
+
+
+    def fetch_data_for_date(self, date):
+        formatted_date = date.strftime('%Y-%m-%d')
+        query = f"""SELECT * FROM [RealEstateData].[dbo].[KrishaAdsFromUAS] WHERE CreateDate = '{formatted_date}'"""
+        with pyodbc.connect(self.connection_str) as conn:
+            df = pd.read_sql(query, conn)
+        return df
+
+    def preprocess_dataframe(self, df):
+        df['Rooms'] = df['Rooms'].astype(int)
+        df = df[pd.to_numeric(df['Year'], errors='coerce').notnull()]
+        df['Year'] = df['Year'].astype(int)
+        df['floor_new'] = df.apply(self.calculate_floor_new, axis=1)
+        df['Latitude'] = pd.to_numeric(df['Latitude'], errors='coerce')
+        df['Longitude'] = pd.to_numeric(df['Longitude'], errors='coerce')
+        return df
+    def calculate_floor_new(self, row):
+        floor = row['Floor']
+        try:
+            n, x = [int(i) for i in floor.split(' из ')]
+            if n == x:
+                return 3
+            elif n == 1:
+                return 1
+            else:
+                return 2
+        except ValueError:
+            return None
+    def calculate_distance(self, row, evaluated_apartment):
+        apartment_loc = [radians(round(row['Latitude'], 4)), radians(round(row['Longitude'], 4))]
+        evaluated_apartment_loc = [radians(round(evaluated_apartment['latitude'], 4)), radians(round(evaluated_apartment['longitude'], 4))]
+        distance = haversine_distances([apartment_loc, evaluated_apartment_loc])[0,1] * 6371000
+        return distance
+
+    def filter_dataframe(self, df, evaluated_apartment, radius, building_types_dict, allow_additional_fetch=True):
+
+        same_room_count_df = df[df['Rooms'] == evaluated_apartment['room_count']].copy()
+        print(f"same_room_count_df DataFrame shape: {same_room_count_df.shape}")
+
+        same_room_count_df['distance'] = same_room_count_df.apply(
+            lambda row: self.calculate_distance(row, evaluated_apartment),
+            axis=1, result_type='expand')
+
+        within_radius_df = same_room_count_df[same_room_count_df['distance'] <= radius]
+        print(f"Within radius DataFrame shape: {within_radius_df.shape}")
+
+        min_year = evaluated_apartment['year_of_construction'] - 5
+        max_year = evaluated_apartment['year_of_construction'] + 5
+        within_year_df = within_radius_df[
+            (within_radius_df['Year'] >= min_year) & (within_radius_df['Year'] <= max_year)
+            ]
+        print(f"Within year DataFrame shape: {within_year_df.shape}")
+
+        # Debugging: Print unique building types before filtering
+        print("Unique building types in DataFrame before filtering:", within_year_df['Building'].str.lower().unique())
+
+        building_type = evaluated_apartment['wall_material'].lower() if evaluated_apartment['wall_material'] else '-'
+
+        # Debugging: Print the building_type for filtering
+        print(f"Building type from user input: {building_type}")
+
+        same_material_df = within_year_df[within_year_df['Building'].str.lower() == building_type]
+
+        # Debugging: Check shape after building type filtering
+        print(f"same_material_df DataFrame shape after building type filtering: {same_material_df.shape}")
+
+        if same_material_df.empty:
+            for key, building_list in building_types_dict.items():
+                if building_type in map(str.lower, building_list):
+                    alternative_building_types = [b.lower() for b in building_list]
+                    same_material_df = within_year_df[
+                        within_year_df['Building'].str.lower().isin(alternative_building_types)
+                    ]
+                    break
+
+        print(f"Same material DataFrame shape: {same_material_df.shape}")
+        condition_value = evaluated_apartment['condition']
+        if pd.isna(condition_value) or condition_value == '':
+            condition_value = '-'
+
+        same_condition_df = same_material_df[same_material_df['Renovation'] == evaluated_apartment['condition']]
+        same_floor_df = same_condition_df[same_condition_df['floor_new'] == evaluated_apartment['floor_new']]
+
+        same_floor_df.loc[:, 'Square'] = pd.to_numeric(same_floor_df['Square'], errors='coerce')
+        min_space = evaluated_apartment['total_space'] * 0.9
+        max_space = evaluated_apartment['total_space'] * 1.1
+        similar_apartments_df = same_floor_df[
+            (same_floor_df['Square'] >= min_space) & (same_floor_df['Square'] <= max_space)
+            ]
+
+        print(f"After all filters DataFrame shape: {similar_apartments_df.shape}")
+
+        if similar_apartments_df.empty:
+            if allow_additional_fetch:  # Check if additional fetch is allowed
+                print("No suitable apartments found, fetching more data...")
+                last_fetched_hrefid = df['HrefId'].min()
+                self.fetch_and_store_data(last_fetched_hrefid=last_fetched_hrefid, force_fetch=True)
+
+                new_data = pd.read_csv('local_data.csv')
+                new_data = self.preprocess_dataframe(new_data)
+                # Print number of rows fetched in the additional fetch
+                print(f"Number of new rows fetched in additional fetch: {new_data.shape[0]}")
+
+                all_data = pd.concat([df, new_data], ignore_index=True)
+
+                return self.filter_dataframe(all_data, evaluated_apartment, radius, building_types_dict,
+                                             allow_additional_fetch=False)
+            else:
+                print("No suitable apartments found even after additional fetch.")
+                return pd.DataFrame()  # Return empty DataFrame
+
+        else:
+            return similar_apartments_df
+
+    def sort_and_select(self, similar_apartments_df, num_apartments, evaluated_apartment):
+        # Check if the 'Square' column is in DataFrame
+        if 'Square' not in similar_apartments_df.columns:
+            print("'Square' column not found in DataFrame. Exiting sort_and_select...")
+            return pd.DataFrame()  # Return empty DataFrame
+
+        similar_apartments_df['similarity'] = abs(
+            similar_apartments_df['Square'] - evaluated_apartment['total_space']) + abs(
+            similar_apartments_df['Year'] - evaluated_apartment['year_of_construction'])
+        sorted_similar_apartments_df = similar_apartments_df.sort_values(by='similarity')
+        top_similar_apartments_df = sorted_similar_apartments_df.head(num_apartments)
+        return top_similar_apartments_df
+
+    def print_descriptive_statistics(self, top_similar_apartments_df):
+        if top_similar_apartments_df.empty:
+            print("No suitable apartments found for descriptive statistics.")
+            return None  # Return None if no suitable apartments found
+
+        top_similar_apartments_df['Price'] = pd.to_numeric(top_similar_apartments_df['Price'], errors='coerce')
+        top_similar_apartments_df['price_per_1sqrm'] = top_similar_apartments_df['Price'] / top_similar_apartments_df[
+            'Square']
+        average_price_per_sqrm = top_similar_apartments_df['price_per_1sqrm'].mean()
+        print(f'Average price per 1 square meter of the top similar apartments: {average_price_per_sqrm}')
+        return average_price_per_sqrm  # Return the average price per square meter
+
+    def find_top_similar_apartments_from_local(self, evaluated_apartment_json_file, radius, num_apartments):
+        # Read evaluated_apartment from JSON file
+        with open(evaluated_apartment_json_file, 'r', encoding='utf-8') as f:
+            evaluated_apartment = json.load(f)
+
+        df = pd.read_csv('local_data.csv')
+        print(f"Initial DataFrame shape: {df.shape}")
+        df = self.preprocess_dataframe(df)
+        if df.empty:
+            print("DataFrame is empty. Exiting find_top_similar_apartments_from_local...")
+            return
+
+        # Notice the addition of building_types_dict here
+        similar_apartments_df = self.filter_dataframe(df, evaluated_apartment, radius, building_types_dict)
+
+        print(f"After filtering DataFrame shape: {similar_apartments_df.shape}")
+        sorted_similar_apartments_df = self.sort_and_select(similar_apartments_df, num_apartments, evaluated_apartment)
+
+        average_price_per_sqrm = self.print_descriptive_statistics(sorted_similar_apartments_df)
+        return average_price_per_sqrm  # Return the average price per square meter
+
+
+# Your JSON file path
+json_file_path = 'C:\\Users\\sarbasov.n\\Downloads\\Telegram Desktop\\evaluated_apartment.json'
+# Initialize RealEstateAnalysis class with your connection string.
+real_estate_analysis = RealEstateAnalysis("DRIVER={SQL Server};SERVER=10.10.2.92;DATABASE=RealEstateData;Trusted_Connection=yes")
+
+
+# Then you can call your function using this path
+average_price_per_sqrm = real_estate_analysis.find_top_similar_apartments_from_local(json_file_path, 1000, 21)
