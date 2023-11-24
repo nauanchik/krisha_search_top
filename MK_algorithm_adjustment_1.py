@@ -11,24 +11,27 @@ import json
 from datetime import datetime as dt
 
 
-
 warnings.filterwarnings('ignore')
 
-building_types_dict = {
-    "кирпичный": ["кирпичный", "гиперпресованный кирпич", "жженый кирпич", "камень ракушечник", "керамзитовый кирпич",
-                  "кирпич", "клинкерный кирпич", "ракушечник", "силикатный кирпич"],
-    "панельный": ["панельный", "ж/б панели", "ж/б плиты", "крупнопанельные", "панель"],
-    "монолитный": ["монолитный", "бетон", "бетонные блоки", "бетонокаркас", "блочный", "газобетон", "газоблок",
-                   "газосиликатные блоки", "ж/б блок", "ж/б пеноблок", "железобетон", "керамзитобетон",
-                   "керамзитобетонный блок", "керамзитовый блок", "крупноблочные", "монолит", "пенобетон", "пеноблочный",
-                   "пенополистиролбетон", "пескоблок", "сплитерные блоки", "теплоблок", "эко-блок", "финблок"],
-    "инное": ["инное","-", "бревенчатые", "брусчатый", "дерево", "дощатые", "ИЗОДОМ", "каркасно-насыпной",
-              "каркасно-камышитовый обложенный кирпичом", "керамзитобетон", "керамзитобетонный блок", "крупноблочные",
-              "ЛСТК", "монолит", "монолит шлаколитой", "пенобетон", "пеноблочный", "пенополистиролбетон",
-              "пескоблок", "СИП панели", "сборно-щитовой", "сплиттерные блоки", "сруб", "сэндвич панели",
-              "теплоблок", "шлак", "шлакобетон", "шлакоблок", "шлакозалитый", "шпальные", "эко-блок",
-              "деревобетон (арболит)", "фибролитовые блоки", "фибролитовые плиты", "финблок", "каркасно-обшивные",
-              "деревянные рубленные"] }
+# building_types_dict = {
+#     "кирпичный": ["кирпичный", "гиперпресованный кирпич", "жженый кирпич", "камень ракушечник", "керамзитовый кирпич",
+#                   "кирпич", "клинкерный кирпич", "ракушечник", "силикатный кирпич"],
+#     "панельный": ["панельный", "ж/б панели", "ж/б плиты", "крупнопанельные", "панель"],
+#     "монолитный": ["монолитный", "бетон", "бетонные блоки", "бетонокаркас", "блочный", "газобетон", "газоблок",
+#                    "газосиликатные блоки", "ж/б блок", "ж/б пеноблок", "железобетон", "керамзитобетон",
+#                    "керамзитобетонный блок", "керамзитовый блок", "крупноблочные", "монолит", "пенобетон", "пеноблочный",
+#                    "пенополистиролбетон", "пескоблок", "сплитерные блоки", "теплоблок", "эко-блок", "финблок"],
+#     "инное": ["инное","-", "бревенчатые", "брусчатый", "дерево", "дощатые", "ИЗОДОМ", "каркасно-насыпной",
+#               "каркасно-камышитовый обложенный кирпичом", "керамзитобетон", "керамзитобетонный блок", "крупноблочные",
+#               "ЛСТК", "монолит", "монолит шлаколитой", "пенобетон", "пеноблочный", "пенополистиролбетон",
+#               "пескоблок", "СИП панели", "сборно-щитовой", "сплиттерные блоки", "сруб", "сэндвич панели",
+#               "теплоблок", "шлак", "шлакобетон", "шлакоблок", "шлакозалитый", "шпальные", "эко-блок",
+#               "деревобетон (арболит)", "фибролитовые блоки", "фибролитовые плиты", "финблок", "каркасно-обшивные",
+#               "деревянные рубленные"] }
+
+# Define building types as a constant
+BUILDING_TYPES = ['кирпичный', 'панельный', 'монолитный', 'инное']
+
 
 renovation_dict = {"хорошее": "хорошее",
                    "среднее": ["среднее", "-", ""],
@@ -37,9 +40,9 @@ renovation_dict = {"хорошее": "хорошее",
                    "черновая отделка": "черновая отделка"}
 
 furniture_map = {
-    "полностью": "полностью",
+    "полностью": ["Квартира меблирована", "полностью"],
     "частично": "частично",
-    "без мебели": ["Квартира меблирована", "-", "", "без мебели",  "_", '-', '']
+    "без мебели": ["-", "", "без мебели",  "_", '-', '']
 }
 
 class RealEstateData:
@@ -98,8 +101,12 @@ class RealEstateData:
         floor_new_mapping = {
             "мансарда": 3,
             "пентхаус": 3,
+            "последний этаж": 3,
+            "средний этаж": 2,
             "цокольный": 1,
-            "цоколь": 1
+            "цоколь": 1,
+            "подвал": 1,
+            "первый этаж": 1,
         }
 
         return floor_new_mapping.get(floor_new_value, floor_new_value)
@@ -123,7 +130,7 @@ class RealEstateData:
         distance = haversine_distances([apartment_loc, evaluated_apartment_loc])[0,1] * 6371000
         return distance
 
-    def filter_dataframe(self, df, evaluated_apartment, radius, building_types_dict, renovation_dict):
+    def filter_dataframe(self, df, evaluated_apartment, radius, renovation_dict):
         # Filter by distance
         df['distance'] = df.apply(
             lambda row: self.calculate_distance(row, evaluated_apartment),
@@ -160,17 +167,14 @@ class RealEstateData:
         # Debugging: Print the building_type for filtering
         print(f"Building type from user input: {building_type}")
 
-        same_material_df = within_year_df[within_year_df['Building'].str.lower() == building_type]
+        if building_type in BUILDING_TYPES:
+            same_material_df = within_year_df[within_year_df['Building'].str.lower() == building_type]
+        else:
+            # If the building type doesn't match any of the main categories, treat it as 'инное'
+            same_material_df = within_year_df[within_year_df['Building'].str.lower() == 'инное']
 
-        if same_material_df.empty:
-            for key, building_list in building_types_dict.items():
-                if building_type in map(str.lower, building_list):
-                    alternative_building_types = [b.lower() for b in building_list]
-                    same_material_df = within_year_df[
-                        within_year_df['Building'].str.lower().isin(alternative_building_types)
-                    ]
-                    break
         print(f"same_material_df shape: {same_material_df.shape}")
+
 
         condition_value = evaluated_apartment['condition']
         if pd.isna(condition_value) or condition_value == '':
@@ -187,14 +191,14 @@ class RealEstateData:
         same_condition_df = same_material_df[same_material_df['Renovation'].isin(renovation_values)]
         print(f"same_condition_df shape: {same_condition_df.shape}")
 
+        print(f'floor value from user input: {evaluated_apartment["floor_new"]}')
+        print(f'floor values in dwh : {same_condition_df["floor_new"].value_counts()}')
         same_floor_df = same_condition_df[same_condition_df['floor_new'] == evaluated_apartment['floor_new']]
         print(f"same_floor_df shape: {same_floor_df.shape}")  # Added print statement
 
         # Filter based on furniture
         furniture_value = evaluated_apartment['furniture']
-        if pd.isna(furniture_value) or furniture_value == '':
-            furniture_value = 'без мебели'
-
+        print(f"furniture_value : {furniture_value} ")
         # If the furniture value from evaluated apartment is in the furniture_map, get the corresponding DWH values
         if furniture_value in furniture_map:
             dwh_furniture_values = furniture_map[furniture_value]
@@ -206,8 +210,9 @@ class RealEstateData:
 
         # Standardizing furniture values before filtering:
         same_floor_df['Furniture'] = same_floor_df['Furniture'].str.lower().str.strip()
-        print(f"same_floor_df['Furniture'].dtypes : {same_floor_df['Furniture'].dtypes} ")
+        print(f"same_floor_df['Furniture'] : {same_floor_df['Furniture']} ")
         dwh_furniture_values = [value.lower().strip() for value in dwh_furniture_values]
+        print(f"dwh_furniture_values after strip and lower: {dwh_furniture_values} ")
         matches = same_floor_df['Furniture'].isin(dwh_furniture_values)
         print(matches.any())
 
@@ -221,7 +226,7 @@ class RealEstateData:
         else:
             return furniture_filtered_df
 
-    def alternative_filtering(self, last_30_days_df, evaluated_apartment, radius, building_types_dict, renovation_dict):
+    def alternative_filtering(self, last_30_days_df, evaluated_apartment, radius, renovation_dict):
 
         # 1. Filter by distance
         last_30_days_df['distance'] = last_30_days_df.apply(
@@ -253,34 +258,20 @@ class RealEstateData:
 
 
         # 2. Filter by room count
-        room_adjustment_factors = {
-            1: {2: 0.98, 3: 1.00, 4: 1.02, 5: 1.02, 6: 1.02, 7: 1.02},
-            2: {1: 1.02, 3: 1.02, 4: 1.02, 5: 1.02, 6: 1.02, 7: 1.02},
-            3: {1: 1, 2: 0.98, 3: 1.00, 4: 1.02, 5: 1.02, 6: 1.02, 7: 1.02},
-            4: {1: 0.98, 2: 0.96, 3: 0.98, 4: 1.00, 5: 1.00, 6: 1.00, 7: 1.00}
-        }
-
         room_count = evaluated_apartment['room_count']
         rooms_to_consider = {room_count}
         same_room_count_df = within_radius_df[within_radius_df['Rooms'].isin(rooms_to_consider)].copy()
-        print(f"same_room_count_df: {same_room_count_df.shape[0]}")
+        print(f"same_room_count_df DataFrame shape BEFORE the filter: {same_room_count_df.shape}")
         # Check if the primary filter yields less than 3 apartments
         if same_room_count_df.shape[0] < 3:
             rooms_to_consider = {1, 2, 3, 4, 5, 6, 7}  # Considering all room options
             same_room_count_df = within_radius_df[within_radius_df['Rooms'].isin(rooms_to_consider)].copy()
-
-            # Apply room adjustments directly after selecting the similar apartments
-            evaluated_room_count = evaluated_apartment['room_count']
-            if evaluated_room_count in room_adjustment_factors:
-                for room, factor in room_adjustment_factors[evaluated_room_count].items():
-                    mask = same_room_count_df['Rooms'] == room
-                    same_room_count_df.loc[mask, 'price_per_1sqrm'] *= factor
-
             print(f"same_room_count_df DataFrame shape AFTER the filter: {same_room_count_df.shape}")
 
             if same_room_count_df.shape[0] < 3:
                 print("Alternative filtering didn't fetch more data. Stopped at room count step.")
                 return pd.DataFrame()
+
 
         # 3. Filter by total space
         same_room_count_df.loc[:, 'Square'] = pd.to_numeric(same_room_count_df['Square'], errors='coerce')
@@ -290,6 +281,7 @@ class RealEstateData:
             (same_room_count_df['Square'] >= min_space) & (same_room_count_df['Square'] <= max_space)
             ]
 
+        print(f"similar_space_df shape BEFORE filters: {similar_space_df.shape}")
         def get_square_adjustment_factor(difference):
             if -30 <= difference <= -16:
                 return 0.94
@@ -304,39 +296,24 @@ class RealEstateData:
             else:
                 return 1  # default adjustment factor
 
-        print(f"similar_space_df: {similar_space_df.shape[0]}")
-
         if similar_space_df.shape[0] < 3:
             # Calculate the square difference for all apartments
             all_space_df = same_room_count_df.copy()
             all_space_df['square_difference'] = all_space_df['Square'] - evaluated_apartment['total_space']
 
-            # Remove apartments where the absolute 'square_difference' is greater than 30
-            all_space_df = all_space_df[all_space_df['square_difference'].abs() <= 30]
-
             # Apply adjustments based on the square difference
             all_space_df['price_per_1sqrm'] *= all_space_df['square_difference'].apply(get_square_adjustment_factor)
+
             similar_space_df = all_space_df
-            print(f"similar_space_df AFTER filtering: {similar_space_df.shape[0]}")
+            print(f"similar_space_df shape AFTER FILTERS: {similar_space_df.shape}")
 
             if similar_space_df.shape[0] < 3:
                 print("Alternative filtering didn't fetch more data. Stopped at space step. Going to year step.")
-                rooms_to_consider = {1, 2, 3, 4, 5, 6, 7}
+                rooms_to_consider = {1, 2, 3, 4, 5, 6, 7}  # Considering all room options
+                # Adjust the data frame again to consider all room options
                 similar_space_df = within_radius_df[within_radius_df['Rooms'].isin(rooms_to_consider)].copy()
+                print(f"same_room_count_df DataFrame shape AFTER the filter: {similar_space_df.shape}")
 
-                # Apply square adjustments
-                similar_space_df['square_difference'] = similar_space_df['Square'] - evaluated_apartment['total_space']
-                similar_space_df['price_per_1sqrm'] *= similar_space_df['square_difference'].apply(
-                    get_square_adjustment_factor)
-
-                # Apply room adjustments
-                evaluated_room_count = evaluated_apartment['room_count']
-                if evaluated_room_count in room_adjustment_factors:
-                    for room, factor in room_adjustment_factors[evaluated_room_count].items():
-                        mask = similar_space_df['Rooms'] == room
-                        similar_space_df.loc[mask, 'price_per_1sqrm'] *= factor
-
-                print(f"similar_space_df AFTER the filter and adjustments: {similar_space_df.shape[0]}")
 
         # 4. Filter by construction year
         min_year = evaluated_apartment['year_of_construction'] - 5
@@ -386,42 +363,20 @@ class RealEstateData:
         # Debugging: Print the building_type for filtering
         print(f"Building type from user input: {building_type}")
         adjustment_matrix = {
-            'кирпичный': {
-                'кирпичный': 1,
-                'панельный': 1.1,
-                'монолитный': 1.05,
-                'иное': 1.15
-            },
-            'панельный': {
-                'кирпичный': 0.9,
-                'панельный': 1,
-                'монолитный': 0.95,
-                'иное': 1.05
-            },
-            'монолитный': {
-                'кирпичный': 0.95,
-                'панельный': 1.05,
-                'монолитный': 1,
-                'иное': 1.1
-            },
-            'иное': {
-                'кирпичный': 0.85,
-                'панельный': 0.95,
-                'монолитный': 0.9,
-                'иное': 1
-            }
+            'кирпичный': {'кирпичный': 1, 'панельный': 1.1, 'монолитный': 1.05, 'иное': 1.15},
+            'панельный': {'кирпичный': 0.9, 'панельный': 1, 'монолитный': 0.95, 'иное': 1.05},
+            'монолитный': {'кирпичный': 0.95, 'панельный': 1.05, 'монолитный': 1, 'иное': 1.1},
+            'иное': {'кирпичный': 0.85, 'панельный': 0.95, 'монолитный': 0.9, 'иное': 1}
         }
 
         same_material_df = within_year_df[within_year_df['Building'].str.lower() == building_type]
 
-        if same_material_df.empty:
-            for key, building_list in building_types_dict.items():
-                if building_type in map(str.lower, building_list):
-                    alternative_building_types = [b.lower() for b in building_list]
-                    same_material_df = within_year_df[
-                        within_year_df['Building'].str.lower().isin(alternative_building_types)
-                    ]
-                    break
+        if building_type in BUILDING_TYPES:
+            same_material_df = within_year_df[within_year_df['Building'].str.lower() == building_type]
+        else:
+            # If the building type doesn't match any of the main categories, treat it as 'инное'
+            same_material_df = within_year_df[within_year_df['Building'].str.lower() == 'инное']
+
         print(f"same_material_df shape: {same_material_df.shape}")
 
         if same_material_df.shape[0] < 3:
@@ -582,8 +537,6 @@ class RealEstateData:
         # Filter based on furniture
         furniture_value = evaluated_apartment['furniture']
         print("Unique furniture types in DataFrame before filtering:", same_floor_df['Furniture'].str.lower().unique())
-        if pd.isna(furniture_value) or furniture_value == '':
-            furniture_value = 'без мебели'
 
         # If the furniture value from evaluated apartment is in the furniture_map, get the corresponding DWH values
         furniture_map_reverse = {v: k for k, vals in furniture_map.items() for v in
@@ -649,6 +602,26 @@ class RealEstateData:
         else:
             return furniture_filtered_df
 
+    def alternative_descriptive_statistics(self, top_similar_apartments_df, evaluated_apartment_room_count):
+        # Define adjustment factors
+        adjustment_factors = {
+            1: {2: 0.98, 3: 1.00, 4: 1.02, 5: 1.02, 6: 1.02, 7 : 1.02},  # Assuming 1+ means 1, 2, 3, 4, 5, etc.
+            2: {1: 1.02, 3: 1.02, 4: 1.02, 5: 1.02, 6: 1.02, 7 : 1.02},
+            3: {1: 1, 2: 0.98, 3: 1.00, 4: 1.02, 5: 1.02, 6: 1.02, 7 : 1.02},  # Assuming 3+ means 3, 4, 5, etc.
+            4: {1: 0.98, 2: 0.96, 3: 0.98, 4: 1.00, 5: 1.00, 6: 1.00, 7 : 1.00}
+        }
+
+        # Adjust the price_per_1sqrm based on the room count
+        if evaluated_apartment_room_count in adjustment_factors:
+            for room, factor in adjustment_factors[evaluated_apartment_room_count].items():
+                mask = top_similar_apartments_df['Rooms'] == room
+                top_similar_apartments_df.loc[mask, 'price_per_1sqrm'] *= factor
+
+        average_price_per_sqrm = top_similar_apartments_df['price_per_1sqrm'].mean()
+        desc_stats_df = top_similar_apartments_df['price_per_1sqrm'].describe().to_frame().T
+
+        return average_price_per_sqrm, desc_stats_df
+
     def print_descriptive_statistics(self, top_similar_apartments_df):
         if top_similar_apartments_df.empty:
             print("No suitable apartments found for descriptive statistics.")
@@ -683,7 +656,7 @@ class RealEstateData:
 
         # 1. Filter for the last 30 days
         last_30_days_df = df[df['CreateDate'] >= (most_recent_date - pd.Timedelta(days=30)).strftime('%Y-%m-%d')]
-        similar_apartments_df = self.filter_dataframe(last_30_days_df, evaluated_apartment, radius, building_types_dict,
+        similar_apartments_df = self.filter_dataframe(last_30_days_df, evaluated_apartment, radius,
                                                       renovation_dict)
 
         if similar_apartments_df.shape[0] >= 3:
@@ -695,7 +668,7 @@ class RealEstateData:
             # 2. Filter for the last 61 days if not enough apartments from the last 30 days
             last_61_days_df = df[df['CreateDate'] >= (most_recent_date - pd.Timedelta(days=61)).strftime('%Y-%m-%d')]
             similar_apartments_df = self.filter_dataframe(last_61_days_df, evaluated_apartment, radius,
-                                                          building_types_dict, renovation_dict)
+                                                           renovation_dict)
 
             if similar_apartments_df.shape[0] >= 3:
                 print("Enough data found in the last 61 days!")
@@ -704,17 +677,17 @@ class RealEstateData:
                     f"Only {similar_apartments_df.shape[0]} similar apartment(s) found from the last 61 days. Proceeding to use all data...")
 
                 # 3. Use all data if still not enough apartments
-                similar_apartments_df = self.filter_dataframe(df, evaluated_apartment, radius, building_types_dict,
+                similar_apartments_df = self.filter_dataframe(df, evaluated_apartment, radius,
                                                               renovation_dict)
                 if similar_apartments_df.shape[0] < 3:
                     print("The 90 days data wasn't enough for analysis")
                     # Call the alternative filtering method using last_30_days_df
                     similar_apartments_df = self.alternative_filtering(last_30_days_df, evaluated_apartment, radius,
-                                                                       building_types_dict, renovation_dict)
+                                                                        renovation_dict)
 
                     if not similar_apartments_df.empty:
-                        average_price_per_sqrm, desc_stats_df = self.print_descriptive_statistics(similar_apartments_df)
-
+                        average_price_per_sqrm, desc_stats_df = self.alternative_descriptive_statistics(
+                            similar_apartments_df, evaluated_apartment['room_count'])
                     else:
                         print("No apartments found even after alternative filtering.")
                         return
@@ -725,7 +698,7 @@ class RealEstateData:
                 if save_to_excel:
                     try:
                         with pd.ExcelWriter(
-                                'C:\\Users\\sarba\\Desktop\\Otbasy\MK\\similar_apartments_analysis.xlsx') as writer:
+                                'C:\\Users\\sarbasov.n\\Desktop\\MK_krisha_search_algotirhm\\ob_mk_mk_krisha_search_algotirhm\\similar_apartments_analysis.xlsx') as writer:
                             similar_apartments_df.to_excel(writer, sheet_name='Similar Apartments', index=False)
                             desc_stats_df.to_excel(writer, sheet_name='Descriptive Statistics', index=False)
                             print("File saved successfully!")
@@ -735,11 +708,8 @@ class RealEstateData:
                 return average_price_per_sqrm
 
 
-import os
-os.getcwd()
-os.chdir(r'C:\Users\sarba\Desktop\Otbasy\MK')
 # Your JSON file path
-json_file_path = 'C:\\Users\\sarba\\Desktop\\Otbasy\\MK\\evaluated_apartment.json'
+json_file_path = 'C:\\Users\\sarbasov.n\\Downloads\\Telegram Desktop\\evaluated_apartment.json'
 # Initialize RealEstateAnalysis class with your connection string.
 connection_string = "DRIVER={SQL Server};SERVER=10.10.2.92;DATABASE=RealEstateData;Trusted_Connection=yes"  # Replace with your actual connection string
 real_estate_data = RealEstateData(connection_string)
